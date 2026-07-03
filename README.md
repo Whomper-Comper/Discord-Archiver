@@ -97,6 +97,12 @@ A lightweight, high-performance browser extension to export Discord chat history
 
 ---
 
+## Known Limitations
+
+**Media URLs expire after ~2 weeks.** Discord serves images, videos, and attachments through time-limited CDN URLs. The extension saves these URLs as-is, so media will stop loading after Discord invalidates them. This is especially important to know if you are archiving a server before it goes offline. Local media downloading is planned for a future version.
+
+---
+
 ## 📜 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
