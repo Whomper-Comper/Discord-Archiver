@@ -5,6 +5,7 @@ mod import;
 mod legacy;
 mod model;
 mod normalize;
+mod provenance;
 mod visible_html;
 pub use export::ArchiveExporter;
 pub use import::ArchiveImporter;

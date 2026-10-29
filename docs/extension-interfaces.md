@@ -42,14 +42,18 @@ Export `default init` and:
 - `new ArchiveImporter(kind: string, channel_json: string)`; kind `json`, `jsonl`,
   `html`, or `legacy_html`. `feed(chunk: string): string` and `finish(): string`
   return JSON `{messages: Message[], channel?: {id,name}, warnings?: string[],
-  legacy_required?: boolean}`. HTML streams recognize existing global
+  legacy_required?: boolean, source_metadata?: {partial?:boolean,status?:string,
+  sources?:object[]}}`. `source_metadata` is optional and returned only by
+  `finish()`. It retains known provenance fields from JSON and HTML documents,
+  including partial history; it excludes imported settings/credentials/arbitrary
+  objects and remains under the metadata cap. HTML streams recognize existing global
   `discord-archive-data` JSON and new per-record `archive-record` JSON script
   elements. HTML without machine data returns `legacy_required:true` at finish;
   worker rereads file with legacy_html. Never retain whole input. Reject truncated
   input; message cap 16 MiB and header/metadata cap 8 MiB. `free()` is generated.
 - `new ArchiveExporter(format: string, options_json: string, metadata_json: string)`.
   `begin(): string`, `push(batch_json: string): string`, `finish(): string`,
-  `count(): number`. Formats `full`, `cleaned`, `messages`, `jsonl`,
+  `count(): number`. Formats `compact`, `compact-cleaned`, `full`, `cleaned`, `messages`, `jsonl`,
   `cleaned-jsonl`, `csv`, `text`, `html`. Options `{user_key:null|string,
   skip_empty:false,include_media:true,pretty:false}`. Metadata contains channel,
   source/status/settings with no token. Push takes normalized records. Rust owns
@@ -76,11 +80,27 @@ Each RPC is serialized, except `cancel` sets a cancellation flag immediately.
 - `create` {channel,settings} -> Job.
 - `append` {jobId,messages:APIObject[],checkpoint:{cursor,status,scanned}} -> Job;
   normalize via Rust then atomically append/checkpoint. Await this before fetch.
-- `finish` {jobId,status:'ready'|'paused'|'error',error?} -> Job.
+- `finish` {jobId,status:'ready'|'paused'|'error',error?,reason?,partial?} -> Job;
+  stores `collectionReason`, and reason `limit` marks the saved history partial.
 - `summary` {jobId,search?:string} -> `{job,users:[{key,id,display_name,username,count}],truncatedUsers}`; limit user results to 200.
 - `import` {file:File,kind?:'json'|'jsonl'|'html'} -> Job; staged cache, only ready
   after validated finish. On failure/cancel discard this staging job and retain
   other jobs. Channel defaults to filename; track actual file bytes.
+- `updateInfo` {jobId,channelId} ->
+  `{job,channelId,newestId,hasMissingIds,hasNonNumericIds}`. Finds the largest
+  numeric saved ID for the explicit channel using identity-index keys, without
+  reading message bodies. A missing ID yields `newestId:null`.
+- `combine` {baseJobId,additionalJobId} -> new ready import Job. Copies base then
+  additional rows in bounded pages; stable channel/message pairs deduplicate with
+  the first copy winning. ID-less/unknown-channel rows are retained. Originals
+  remain untouched; failures/cancellation delete the staged combined job. Changed
+  or removed sources during copying abort the combination.
+- `merge` {baseJobId,file:File,kind?} -> new ready import Job. Imports the incoming
+  file temporarily, combines it with the base, then removes the temporary job.
+  The base and input file stay intact. Both update commands return `mergeStats`
+  with `originalCount,incomingCount,added,duplicates,unidentified`, plus source
+  provenance and partial-history flags. For file merges incomingCount is parsed
+  records; for cached combines it is the incoming cache count.
 - `preview` {jobId,format,options} -> `{text,count}`; first three matching records,
   bounded output preview (at most 256 KiB). Count may be the preview count.
 - `export` {jobId,formats:string[],options,splitMessages:number,filename:string}
@@ -90,13 +110,23 @@ Each RPC is serialized, except `cancel` sets a cancellation flag immediately.
   filenames; no all-output Blob/string concatenation. Exports survive as download
   links; Files remain backed by OPFS. Report partial archive status in metadata.
 - `delete` {jobId} -> `{deleted:true}`.
+- `clearExports` -> `{cleared:number}`; releases generated OPFS scratch files.
 - `cancel` -> `{cancelled:true}`.
 
 Job: `{id,name,channel:{id,name},kind:'capture'|'import',status,count,bytes,scanned,
-cursor,settings,createdAt,updatedAt,error?,warnings?:string[]}`. Keep the original
+cursor,settings,createdAt,updatedAt,error?,warnings?:string[],partial?,sources?,
+mergeStats?,collectionReason?}`. Keep the original
 settings and cursor for resume. Capture order is oldest-first on export, imports
 retain input order. Deduplicate only stable channel/message ID pairs. No global
 in-memory dedup set: use IndexedDB keys/indexes.
+
+For incremental live collection, settings may include `afterId` and
+`updateBaseJobId`. Sequential latest-to-older pagination retains only IDs newer
+than `afterId` and stops when that boundary is reached. Resume uses these saved
+settings. Date/start-before form fields are ignored for a newly started update;
+pacing, request size, message cap and user filters remain effective. A ready
+capture is combined with its saved base; a cancelled/failed combination can be
+retried using that capture. This does not fill older gaps or reconcile edits.
 
 ## Storage module
 
@@ -106,3 +136,9 @@ Read output in bounded pages with a continuation key; never getAll all messages.
 Persist normalized records with job/identity/order keys; ID-based dedup does not
 drop messages without IDs. Store source order, and descending collection sequence
 so exports of newest-first capture pages become oldest-first.
+
+Cache schema v2 adds `authorOrder:[jobId,authorKey,order]`. A transactional
+v1-to-v2 cursor backfill updates one record at a time and preserves existing
+jobs/order/identities/user counts. `readPage(id,{after,limit,userKey})` uses this
+index for a selected author and clamps pages to at most 100 records. Rust still
+performs final author filtering. Large existing caches can take time to upgrade.

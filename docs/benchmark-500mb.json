@@ -8,11 +8,11 @@
   "validatedRecords": 59688,
   "firstId": "1000000000",
   "lastId": "1000059687",
-  "outputBytes": 494754674,
-  "importSeconds": 38.754199999999955,
-  "exportSeconds": 34.72069999999995,
-  "validationSeconds": 13.99290000000014,
+  "outputBytes": 494754707,
+  "importSeconds": 46.699599999999975,
+  "exportSeconds": 34.49129999999999,
+  "validationSeconds": 13.453400000000023,
   "wasmMemoryPeak": 3473408,
-  "sampledBrowserWorkingSetPeakBytes": 453287936,
+  "sampledBrowserWorkingSetPeakBytes": 686313472,
   "workingSetNote": "Sum of sampled Windows browser process working sets; shared pages may be counted more than once."
 }

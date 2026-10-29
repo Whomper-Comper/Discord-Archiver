@@ -1,0 +1,85 @@
+{
+  "date": "2026-10-29T03:41:49.823Z",
+  "scope": "Production ArchiveStorage with real IndexedDB in local headless Chromium/Edge, 1 KiB synthetic message contents and 1% selected author. One v1-to-v2 upgrade, then three alternating full-scan/indexed reads of the same v2 database. Storage-only: excludes WASM, OPFS, worker, live Discord and whole-pipeline memory. Timings depend on browser, disk and cache.",
+  "browser": "156.0.4314.50",
+  "records": 10000,
+  "normalizedMessageBytes": 11349190,
+  "selectedEvery": 100,
+  "selectedKey": "id:selected",
+  "beforeUpgradeScan": {
+    "milliseconds": 677.2,
+    "pages": 100,
+    "rowsReturned": 10000,
+    "cursorRows": 10099,
+    "selected": 100,
+    "fingerprint": 3365429704,
+    "maxPageRecords": 100
+  },
+  "migrationMilliseconds": 7798.5,
+  "comparisons": [
+    {
+      "scan": {
+        "milliseconds": 557.7,
+        "pages": 100,
+        "rowsReturned": 10000,
+        "cursorRows": 10099,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      },
+      "indexed": {
+        "milliseconds": 5.5,
+        "pages": 1,
+        "rowsReturned": 100,
+        "cursorRows": 100,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      }
+    },
+    {
+      "scan": {
+        "milliseconds": 490.1,
+        "pages": 100,
+        "rowsReturned": 10000,
+        "cursorRows": 10099,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      },
+      "indexed": {
+        "milliseconds": 4.3,
+        "pages": 1,
+        "rowsReturned": 100,
+        "cursorRows": 100,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      }
+    },
+    {
+      "scan": {
+        "milliseconds": 434.6,
+        "pages": 100,
+        "rowsReturned": 10000,
+        "cursorRows": 10099,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      },
+      "indexed": {
+        "milliseconds": 5.6,
+        "pages": 1,
+        "rowsReturned": 100,
+        "cursorRows": 100,
+        "selected": 100,
+        "fingerprint": 3365429704,
+        "maxPageRecords": 100
+      }
+    }
+  ],
+  "medianScanMilliseconds": 490.1,
+  "medianIndexedMilliseconds": 5.5,
+  "cursorRowReductionPercent": 99.01,
+  "bounds": "readPage returns at most 100 records plus one cursor lookahead; v1 upgrade updates one row at a time inside one atomic versionchange transaction. The browser controls transaction/index memory and disk use. Large v1 caches may take time to upgrade before initialization completes."
+}

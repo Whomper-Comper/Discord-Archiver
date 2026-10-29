@@ -3,6 +3,7 @@ import { ArchiveStorage } from './storage.js';
 const CHUNK_BYTES = 256 * 1024;
 const FORMATS = new Set(['full','cleaned','compact','compact-cleaned','messages','jsonl','cleaned-jsonl','csv','text','html']);
 const EXPORT_DIRECTORY = 'discord-archive-exports';
+const INCOMPLETE_STATUSES = new Set(['paused','error','collecting','importing','cancelled','partial']);
 const extension = format => ({full:'json',cleaned:'json',compact:'json','compact-cleaned':'json',messages:'json','cleaned-jsonl':'jsonl',text:'txt'}[format] || format);
 const safeName = name => String(name || 'archive').replace(/[^\p{L}\p{N}._-]+/gu,'-').replace(/^\.+|\.+$/g,'').slice(0,100) || 'archive';
 const errorText = error => error?.name === 'QuotaExceededError'
@@ -46,7 +47,8 @@ export function createArchiveWorker(dependencies = {}) {
     lastProgressKey=key;lastProgressAt=now;
     progress({type:'progress',operation,jobId:job.id,count:job.count,bytes:bytes ?? job.bytes,totalBytes,status:job.status});
   };
-  const metadataFor = job => ({schema_version:1,channel:job.channel,source:{kind:job.kind,name:job.name},sources:[{kind:job.kind,name:job.name}],status:job.status,partial:job.status !== 'ready',settings:job.settings,warnings:job.warnings || [],message_count:job.count});
+  const sourcesFor = job => job.sources?.length ? job.sources : [{kind:job.kind,name:job.name,status:job.status,partial:Boolean(job.partial || job.status !== 'ready')}];
+  const metadataFor = job => ({schema_version:1,channel:job.channel,source:{kind:job.kind,name:job.name},sources:sourcesFor(job),status:job.status,partial:Boolean(job.partial || job.status !== 'ready'),settings:job.settings,warnings:job.warnings || [],message_count:job.count,...(job.mergeStats?{merge_stats:job.mergeStats}:{})});
   const exporterFor = (format, options, job) => {
     if (!FORMATS.has(format)) throw new Error(`Unsupported export format: ${format}`);
     return new engine.ArchiveExporter(format,JSON.stringify(options || {}),JSON.stringify(metadataFor(job)));
@@ -60,12 +62,13 @@ export function createArchiveWorker(dependencies = {}) {
     kind ||= /\.(jsonl|ndjson)$/i.test(underlyingName) ? 'jsonl' : /\.html?$/i.test(underlyingName) ? 'html' : 'json';
     if (!['json','jsonl','html'].includes(kind)) throw new Error('Unsupported import format');
     let job = await storage.create({kind:'import',name:file.name,channel:{id:null,name:file.name},settings:{}});
-    const warnings = new Set();
+    const warnings = new Set();let sourceMetadata;
     async function pass(parserKind) {
       const importer = new engine.ArchiveImporter(parserKind,JSON.stringify({...job.channel,source:file.name}));
       let bytes=0,reader;
       const save = async text => {
         const result = JSON.parse(text);
+        if(result.source_metadata)sourceMetadata=result.source_metadata;
         for (const warning of result.warnings || []) if(warnings.size<100)warnings.add(String(warning));
         if(result.channel)job=await storage.update(job.id,{channel:{id:result.channel.id ?? null,name:result.channel.name || job.channel.name}});
         const records=result.messages || [];
@@ -106,8 +109,69 @@ export function createArchiveWorker(dependencies = {}) {
         warnings.add('Legacy HTML has limited author IDs and reply information.');
         await pass('legacy_html');
       }
-      check(token);job=await storage.update(job.id,{status:'ready',warnings:[...warnings],bytes:file.size});check(token);emit('import',job,file.size,file.size,true);return job;
+      const partial=Boolean(sourceMetadata?.partial || INCOMPLETE_STATUSES.has(sourceMetadata?.status));
+      const sources=[{kind:'import',name:file.name,status:sourceMetadata?.status || 'ready',partial},...(sourceMetadata?.sources || [])];
+      check(token);job=await storage.update(job.id,{status:'ready',partial,sources,warnings:[...warnings],bytes:file.size});check(token);emit('import',job,file.size,file.size,true);check(token);return job;
     } catch(error) {await storage.delete(job.id);throw error;}
+  }
+
+  async function combine({baseJobId,additionalJobId}, token, {incomingCount} = {}) {
+    if(baseJobId===additionalJobId)throw new Error('An archive cannot be combined with itself');
+    const base=await exportableJob(baseJobId),additional=await exportableJob(additionalJobId);check(token);
+    await preflight((base.bytes || 0)+(additional.bytes || 0));check(token);
+    let job=await storage.create({kind:'import',name:`${base.name} (updated)`,channel:{id:null,name:base.channel.name},settings:base.settings});
+    incomingCount ??= additional.count;
+    const mergeStats={originalCount:base.count,incomingCount,added:0,duplicates:Math.max(0,incomingCount-additional.count),unidentified:0};
+    const warnings=new Set([...(base.warnings || []),...(additional.warnings || [])]);
+    let bytes=0,channelId=null,unknownChannel=false,multipleChannels=false;const encoder=new TextEncoder();
+    try {
+      check(token);
+      for(const source of [base,additional]){
+        let after=null,readCount=0;
+        do {
+          check(token);const page=await storage.readPage(source.id,{after,limit:100});check(token);after=page.next;
+          readCount+=page.messages.length;
+          if(readCount>source.count)throw new Error('Archive source changed while combining. Pause its collection and retry; original archives remain available.');
+          // Preserve each source's known channel context, never infer one from the
+          // other source. Unknown-channel records stay unidentified in the stage.
+          const records=page.messages.map(message=>message.channel_id == null && source.channel.id != null ? {...message,channel_id:source.channel.id} : message);
+          for(const message of records){
+            if(message.channel_id == null)unknownChannel=true;
+            else if(channelId===null)channelId=String(message.channel_id);
+            else if(channelId!==String(message.channel_id))multipleChannels=true;
+            if(message.id == null || message.channel_id == null)mergeStats.unidentified++;
+            bytes+=encoder.encode(JSON.stringify(message)).byteLength;
+          }
+          const previousCount=job.count;
+          job=await storage.append(job.id,records,{bytes,scanned:job.scanned+records.length});check(token);
+          if(source.id===additional.id){const added=job.count-previousCount;mergeStats.added+=added;mergeStats.duplicates+=records.length-added;}
+          emit('combine',job,bytes);check(token);
+        }while(after!==null);
+        if(readCount!==source.count)throw new Error('Archive source changed or was removed while combining. Select the source again and retry.');
+      }
+      // Another workspace can modify/delete a source between page transactions.
+      // Reject an inconsistent copy rather than publishing silently missing rows.
+      for(const source of [base,additional]){
+        const latest=await storage.get(source.id);check(token);
+        if(!latest||latest.count!==source.count||latest.updatedAt!==source.updatedAt||latest.status!==source.status)
+          throw new Error('Archive source changed or was removed while combining. Pause its collection and retry; surviving originals remain available.');
+      }
+      if(mergeStats.unidentified)warnings.add('Messages without a known channel/message ID pair were retained without fuzzy deduplication; identical legacy text may appear more than once.');
+      const partial=Boolean(base.partial || additional.partial || base.status!=='ready' || additional.status!=='ready');
+      check(token);job=await storage.update(job.id,{status:'ready',partial,mergeStats,sources:[...sourcesFor(base),...sourcesFor(additional)],warnings:[...warnings],channel:{id:unknownChannel || multipleChannels ? null : channelId,name:base.channel.name}});check(token);
+      emit('combine',job,bytes,undefined,true);check(token);return job;
+    }catch(error){await storage.delete(job.id);throw error;}
+  }
+
+  async function mergeFile({baseJobId,file,kind}, token) {
+    await exportableJob(baseJobId);check(token);
+    let incoming,combined;
+    try {
+      incoming=await importFile({file,kind},token);check(token);
+      combined=await combine({baseJobId,additionalJobId:incoming.id},token,{incomingCount:incoming.scanned});check(token);
+      await storage.delete(incoming.id);incoming=undefined;check(token);return combined;
+    }catch(error){if(combined)await storage.delete(combined.id);throw error;}
+    finally{if(incoming)await storage.delete(incoming.id);}
   }
 
   async function preview({jobId,format,options}, token) {
@@ -120,7 +184,7 @@ export function createArchiveWorker(dependencies = {}) {
     try {
       add(exporter.begin());
       outer: do {
-        check(token);const page=await storage.readPage(jobId,{after,limit:100});after=page.next;
+        check(token);const page=await storage.readPage(jobId,{after,limit:100,userKey:options?.user_key});check(token);after=page.next;
         for(const message of page.messages){add(exporter.push(JSON.stringify([message])));if(exporter.count()>=3||bytes>=CHUNK_BYTES)break outer;}
       } while(after!==null);
       add(exporter.finish());return {text,count:exporter.count()};
@@ -172,7 +236,7 @@ export function createArchiveWorker(dependencies = {}) {
         };
         start();
         do {
-          check(token);const page=await storage.readPage(jobId,{after,limit:100});after=page.next;
+          check(token);const page=await storage.readPage(jobId,{after,limit:100,userKey:options.user_key});check(token);after=page.next;
           for(const message of page.messages){
             check(token);if(!exporter)start();
             const before=exporter.count(),chunk=exporter.push(JSON.stringify([message]));
@@ -242,10 +306,20 @@ export function createArchiveWorker(dependencies = {}) {
       }
       case 'finish':{
         if(!['ready','paused','error'].includes(message.status))throw new Error('Invalid capture status');
-        return storage.update(message.jobId,{status:message.status,error:message.error?String(message.error):null});
+        const changes={status:message.status,error:message.error?String(message.error):null};
+        if(message.reason!=null)changes.collectionReason=String(message.reason);
+        if(message.partial!=null)changes.partial=Boolean(message.partial);
+        if(message.reason==='limit')changes.partial=true;
+        return storage.update(message.jobId,changes);
       }
       case 'summary':return storage.summary(message.jobId,message.search);
       case 'import':return importFile(message,token);
+      case 'combine':return combine(message,token);
+      case 'merge':return mergeFile(message,token);
+      case 'updateInfo':{
+        await exportableJob(message.jobId);check(token);
+        const result=await storage.updateInfo(message.jobId,message.channelId,{check:()=>check(token)});check(token);return result;
+      }
       case 'preview':return preview(message,token);
       case 'export':return exportFiles(message,token);
       case 'delete':return storage.delete(message.jobId);

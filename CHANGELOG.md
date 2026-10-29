@@ -4,6 +4,18 @@ All notable changes to Discord Archiver are documented here.
 
 ---
 
+## [2.1.0] - 2026-10-29
+
+- Add messages to existing HTML/JSON archives from files or saved caches, producing a new combined copy with known-ID deduplication and source-order preservation.
+- Fetch newer messages using the latest saved ID for the open channel; pause/resume updates and recover completed captures if combining is interrupted.
+- Preserve partial-history/source metadata across JSON/HTML conversions and merges. Keep original-extension HTML compatible, without inventing absent IDs.
+- Index author reads with a non-destructive cache migration; a scoped 10,000-record Edge benchmark reduced sparse-author cursor visits by 99%.
+- Polish source tabs, archive overview, progress, drag-and-drop imports, format cards, copy-preview and download controls, keyboard support, and narrow layouts.
+- Add contributor documentation, architecture/export/recovery guides, AGENTS.md, and automated checks. Include documentation in the installable ZIP.
+- Verify actual MV3 extension behavior in Edge, plus JavaScript/Rust/WASM tests and the synthetic 500 MB disk pipeline. Live Discord and Firefox remain unverified.
+
+---
+
 ## [2.0.0] - 2026-10-29
 
 ### Added

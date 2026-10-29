@@ -68,6 +68,30 @@ const legacyRows = JSON.parse(legacy.feed(`<div class="chatlog">${namedRow('1', 
 legacyRows.push(...JSON.parse(legacy.finish()).messages);
 legacy.free();
 assert.deepEqual(legacyRows.map(m => [m.author.id, m.author.display_name]), [['1', 'First'], ['2', 'Unknown'], ['2', 'Unknown']]);
+for (const format of ['full', 'compact', 'html']) {
+  const source = { kind: 'capture', name: 'partial.json', status: 'paused', partial: true, settings: { minimumInterval: 100 }, auth: 'SECRET' };
+  let metadata = { channel: JSON.parse(channel), status: 'ready', partial: true, sources: [source] };
+  for (let generation = 0; generation < 2; generation++) {
+    const e = new ArchiveExporter(format, '{}', JSON.stringify(metadata));
+    const input = e.begin() + e.push(normalized) + e.finish();
+    e.free();
+    const p = new ArchiveImporter(format === 'html' ? 'html' : 'json', channel);
+    const rows = [];
+    for (const scalar of input) {
+      const result = JSON.parse(p.feed(scalar));
+      assert.equal(result.source_metadata, undefined);
+      rows.push(...result.messages);
+    }
+    const finish = JSON.parse(p.finish());
+    p.free();
+    assert.equal(finish.source_metadata.partial, true);
+    assert.equal(finish.source_metadata.status, 'ready');
+    assert.deepEqual(finish.source_metadata.sources, [{ kind: 'capture', name: 'partial.json', status: 'paused', partial: true }]);
+    assert.ok(!JSON.stringify(finish.source_metadata).includes('SECRET'));
+    assert.ok(!JSON.stringify(finish.source_metadata).includes('settings'));
+    metadata = { channel: JSON.parse(channel), ...finish.source_metadata };
+  }
+}
 // A large stream reuses bounded input chunks and emits immediately.
 const importer = new ArchiveImporter('jsonl', channel);
 const line = JSON.stringify(raw[0]) + '\n';

@@ -4,6 +4,7 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import { ArchiveStorage } from '../storage.js';
 import { createArchiveWorker } from '../archive-worker.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { readFile } from 'node:fs/promises';
 
 const msg=(id,content='hello')=>({id,channel_id:'c',author:{id:'u',display_name:'User',username:'user'},content});
 class Exporter {
@@ -190,4 +191,212 @@ test('clearExports stays inside its scratch folder and does not recurse into dir
  const opened=[];const root={async getDirectoryHandle(name){opened.push(name);return fs;},async removeEntry(){assert.fail('must not remove root entries');}};
  const {worker,storage}=await setup({getDirectory:async()=>root});
  assert.deepEqual(await worker.dispatch({type:'clearExports'}),{cleared:1});assert.deepEqual(opened,['discord-archive-exports']);storage.close();
+});
+
+test('selected-author preview and split export only pass indexed rows to the final exporter filter',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const job=await storage.create({kind:'import',channel:{id:'c',name:'r'}});
+ const rows=Array.from({length:305},(_,i)=>({...msg(String(i),`row-${i}`),author:{id:i%100===0?'selected':'other',display_name:'Same'}}));
+ for(let i=0;i<rows.length;i+=100)await storage.append(job.id,rows.slice(i,i+100));
+ await storage.update(job.id,{status:'ready'});
+ const readPage=storage.readPage.bind(storage),reads=[];
+ storage.readPage=async(id,options)=>{const page=await readPage(id,options);reads.push({options,ids:page.messages.map(m=>m.id)});return page;};
+ const options={user_key:'id:selected',skip_empty:true};
+ const preview=await worker.dispatch({type:'preview',jobId:job.id,format:'messages',options});
+ assert.deepEqual(JSON.parse(preview.text),['row-0','row-100','row-200']);
+ assert.ok(reads.every(read=>read.options.userKey==='id:selected'));
+ assert.deepEqual(reads.flatMap(read=>read.ids),['0','100','200','300']);reads.length=0;
+ const result=await worker.dispatch({type:'export',jobId:job.id,formats:['messages'],options,splitMessages:2});
+ assert.equal(result.count,4);assert.deepEqual(result.files.map(file=>file.count),[2,2]);
+ assert.deepEqual(await Promise.all(result.files.map(async file=>JSON.parse(await file.file.text()))),[['row-0','row-100'],['row-200','row-300']]);
+ assert.ok(reads.every(read=>read.options.userKey==='id:selected'));
+ assert.deepEqual(reads.flatMap(read=>read.ids),['0','100','200','300']);
+});
+
+test('cancel after an indexed page prevents reading the next selected-author page',async t=>{
+ const {worker,storage,fs}=await setup();t.after(()=>storage.close());const job=await storage.create({kind:'import'});
+ await storage.append(job.id,Array.from({length:110},(_,i)=>msg(String(i))));await storage.update(job.id,{status:'ready'});
+ const readPage=storage.readPage.bind(storage);let reads=0;
+ storage.readPage=async(id,options)=>{const page=await readPage(id,options);reads++;await worker.dispatch({type:'cancel'});return page;};
+ await assert.rejects(worker.dispatch({type:'export',jobId:job.id,formats:['messages'],options:{user_key:'id:u'}}),/cancel/i);
+ assert.equal(reads,1);assert.equal(fs.files.size,0);assert.equal((await storage.get(job.id)).count,110);
+});
+
+test('preview cancellation during a selected-author page read does not return a stale result',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const job=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(job.id,[msg('1')]);const readPage=storage.readPage.bind(storage);
+ storage.readPage=async(id,options)=>{const page=await readPage(id,options);await worker.dispatch({type:'cancel'});return page;};
+ await assert.rejects(worker.dispatch({type:'preview',jobId:job.id,format:'messages',options:{user_key:'id:u'}}),/cancel/i);
+});
+
+test('combine keeps base chronology, adds new stable identities and retains identical ID-less legacy rows',async t=>{
+ let metadata;class Meta extends Exporter{constructor(...args){super(...args);metadata=this.metadata;}}
+ const {worker,storage}=await setup({engine:{ArchiveExporter:Meta}});t.after(()=>storage.close());
+ const base=await storage.create({channel:{id:'c',name:'room'},name:'Base',settings:{cap:20}});
+ await storage.append(base.id,[msg('3','base-3'),msg('2','base-2'),msg('1','base-1')]);await storage.update(base.id,{status:'paused'});
+ const incoming=await storage.create({kind:'import',name:'More',channel:{id:'c',name:'room'}});
+ await storage.append(incoming.id,[msg('3','changed-copy'),msg('4','new'),{...msg('3','other-channel'),channel_id:'d'},msg(null,'same legacy'),msg(null,'same legacy')]);
+ await storage.update(incoming.id,{status:'ready'});const before=await storage.list();
+ const combined=await worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id});
+ assert.notEqual(combined.id,base.id);assert.notEqual(combined.id,incoming.id);assert.equal(combined.status,'ready');assert.equal(combined.count,7);assert.equal(combined.partial,true);
+ assert.deepEqual(combined.mergeStats,{originalCount:3,incomingCount:5,added:4,duplicates:1,unidentified:2});
+ assert.deepEqual((await storage.readPage(combined.id)).messages.map(m=>m.content),['base-1','base-2','base-3','new','other-channel','same legacy','same legacy']);
+ assert.deepEqual(combined.sources.map(source=>[source.name,source.kind,source.status]),[['Base','capture','paused'],['More','import','ready']]);
+ assert.ok(combined.warnings.some(warning=>/ID|identit/i.test(warning)));
+ assert.deepEqual((await storage.list()).filter(job=>job.id!==combined.id),before);
+ await worker.dispatch({type:'preview',jobId:combined.id,format:'full'});assert.equal(metadata.partial,true);assert.deepEqual(metadata.sources,combined.sources);
+ await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:base.id}),/same|itself/i);
+});
+
+test('combine streams pages of 100 and preserves import source order rather than sorting guessed timestamps',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({kind:'import',name:'Original'}),incoming=await storage.create({kind:'import',name:'Extra'});
+ for(let i=0;i<205;i+=100)await storage.append(base.id,Array.from({length:Math.min(100,205-i)},(_,j)=>msg(String(i+j),`base-${i+j}`)));
+ await storage.append(incoming.id,[msg('300','extra-last'),msg('206','extra-first')]);
+ await storage.update(base.id,{status:'ready'});await storage.update(incoming.id,{status:'ready'});
+ const readPage=storage.readPage.bind(storage),sizes=[];storage.readPage=async(id,options)=>{assert.equal(options.limit,100);const page=await readPage(id,options);sizes.push(page.messages.length);return page;};
+ const combined=await worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id});
+ assert.deepEqual(sizes,[100,100,5,2]);assert.equal(combined.partial,false);assert.equal(combined.count,207);
+ assert.deepEqual((await readPage(combined.id,{after:200})).messages.map(m=>m.content),['base-200','base-201','base-202','base-203','base-204','extra-last','extra-first']);
+});
+
+test('merge imports a file into a temporary source then removes temporary jobs while preserving the base',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({kind:'import',name:'Base',channel:{id:'c',name:'r'}});
+ await storage.append(base.id,[msg('1','kept')]);await storage.update(base.id,{status:'ready'});const original=await storage.get(base.id);
+ const file=new File([JSON.stringify(msg('1','duplicate'))+'\n'+JSON.stringify(msg('2','added'))+'\n'+JSON.stringify(msg('2','repeated in file'))+'\n'],'more.jsonl');
+ const combined=await worker.dispatch({type:'merge',baseJobId:base.id,file});
+ assert.equal(combined.count,2);assert.equal(combined.mergeStats.added,1);assert.equal(combined.mergeStats.duplicates,2);assert.equal(combined.mergeStats.incomingCount,3);
+ assert.deepEqual((await storage.readPage(combined.id)).messages.map(m=>m.content),['kept','added']);
+ assert.deepEqual((await storage.list()).map(job=>job.id).sort(),[base.id,combined.id].sort());assert.deepEqual(await storage.get(base.id),original);
+ assert.equal(combined.sources[1].name,'more.jsonl');
+ await assert.rejects(worker.dispatch({type:'merge',baseJobId:base.id,file:new File(['broken'],'invalid.jsonl')}),/truncated/i);
+ assert.deepEqual((await storage.list()).map(job=>job.id).sort(),[base.id,combined.id].sort());assert.deepEqual(await storage.get(base.id),original);
+});
+
+test('canceled combine removes its staging job and never changes either source',async t=>{
+ let worker;const setupResult=await setup({progress:progress=>{if(progress.operation==='combine')worker.dispatch({type:'cancel'});}});worker=setupResult.worker;
+ const {storage}=setupResult;t.after(()=>storage.close());const base=await storage.create({channel:{id:'c',name:'r'}}),incoming=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(base.id,[msg('1')]);await storage.append(incoming.id,[msg('2')]);const before=await storage.list();
+ await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/cancel/i);assert.deepEqual(await storage.list(),before);
+});
+
+test('cancellation during file merge removes imported temporary source and combined stage',async t=>{
+ let worker;const setupResult=await setup({progress:progress=>{if(progress.operation==='combine')worker.dispatch({type:'cancel'});}});worker=setupResult.worker;
+ const {storage}=setupResult;t.after(()=>storage.close());const base=await storage.create({channel:{id:'c',name:'r'}});await storage.append(base.id,[msg('1')]);const before=await storage.list();
+ await assert.rejects(worker.dispatch({type:'merge',baseJobId:base.id,file:new File([JSON.stringify(msg('2'))+'\n'],'extra.jsonl')}),/cancel/i);
+ assert.deepEqual(await storage.list(),before);
+});
+
+test('incomplete import sources cannot be combined or used for a file merge',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({kind:'import'}),incoming=await storage.create({channel:{name:'ready'}});
+ const before=await storage.list();await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/incomplete/i);
+ await assert.rejects(worker.dispatch({type:'merge',baseJobId:base.id,file:new File(['broken'],'extra.json')}),/incomplete/i);assert.deepEqual(await storage.list(),before);
+});
+
+test('updateInfo RPC returns the requested channel anchor and does not deserialize source records',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const job=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(job.id,[msg('2'),msg('10'),{...msg('999'),channel_id:'d'}]);storage.readPage=()=>{throw Error('body read forbidden');};
+ const info=await worker.dispatch({type:'updateInfo',jobId:job.id,channelId:'c'});assert.equal(info.newestId,'10');assert.equal(info.hasMissingIds,false);
+});
+
+test('combine never borrows the base channel for incoming records with unknown channel identity',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({kind:'import',channel:{id:'c',name:'r'}}),incoming=await storage.create({kind:'import'});
+ await storage.append(base.id,[msg('1','known')]);await storage.append(incoming.id,[{...msg('1','unknown'),channel_id:null},{...msg('1','unknown'),channel_id:null}]);
+ await storage.update(base.id,{status:'ready'});await storage.update(incoming.id,{status:'ready'});
+ const combined=await worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id});
+ assert.equal(combined.count,3);assert.equal(combined.channel.id,null);assert.equal(combined.mergeStats.unidentified,2);assert.equal(combined.mergeStats.duplicates,0);
+ assert.deepEqual((await storage.readPage(combined.id)).messages.map(m=>m.channel_id),['c',null,null]);
+});
+
+test('late cancellation after the ready staging commit still removes the combined result',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({channel:{id:'c',name:'r'}}),incoming=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(base.id,[msg('1')]);await storage.append(incoming.id,[msg('2')]);const before=await storage.list(),update=storage.update.bind(storage);
+ storage.update=async(id,changes)=>{const value=await update(id,changes);if(changes.mergeStats)await worker.dispatch({type:'cancel'});return value;};
+ await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/cancel/i);assert.deepEqual(await storage.list(),before);
+});
+
+test('append failure during combine removes partial output and preserves committed originals',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({channel:{id:'c',name:'r'}}),incoming=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(base.id,[msg('1')]);await storage.append(incoming.id,[msg('2')]);const before=await storage.list(),append=storage.append.bind(storage);let calls=0;
+ storage.append=async(...args)=>{if(++calls===2)throw Error('disk write failed');return append(...args);};
+ await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/disk write failed/i);assert.deepEqual(await storage.list(),before);
+});
+
+test('merge cancellation at temporary-file cleanup removes the newly combined result too',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());const base=await storage.create({channel:{id:'c',name:'r'}});await storage.append(base.id,[msg('1')]);const before=await storage.list();
+ const remove=storage.delete.bind(storage);let first=true;
+ storage.delete=async id=>{const value=await remove(id);if(first){first=false;await worker.dispatch({type:'cancel'});}return value;};
+ await assert.rejects(worker.dispatch({type:'merge',baseJobId:base.id,file:new File([JSON.stringify(msg('2'))+'\n'],'extra.jsonl')}),/cancel/i);assert.deepEqual(await storage.list(),before);
+});
+
+test('actual WASM file merge preserves partial source history for full JSON, compact JSON and structured HTML',async t=>{
+ const engine=await import('../wasm/archive_engine.js');await engine.default({module_or_path:await readFile(new URL('../wasm/archive_engine_bg.wasm',import.meta.url))});
+ const {worker,storage}=await setup({engine});t.after(()=>storage.close());
+ const source=await worker.dispatch({type:'create',channel:{id:'c',name:'Original'},settings:{}});
+ await worker.dispatch({type:'append',jobId:source.id,messages:[msg('2'),msg('1')]});await worker.dispatch({type:'finish',jobId:source.id,status:'paused'});
+ const output=await worker.dispatch({type:'export',jobId:source.id,formats:['full','compact','html'],options:{include_machine_data:true}});
+ const base=await worker.dispatch({type:'create',channel:{id:'c',name:'Destination'},settings:{}});
+ await worker.dispatch({type:'append',jobId:base.id,messages:[msg('0')]});await worker.dispatch({type:'finish',jobId:base.id,status:'ready'});
+ for(const file of output.files){
+  const combined=await worker.dispatch({type:'merge',baseJobId:base.id,file:file.file});
+  assert.equal(combined.count,3);assert.equal(combined.partial,true);assert.equal(combined.status,'ready');
+  assert.ok(combined.sources.some(source=>source.status==='paused'));
+  const full=await worker.dispatch({type:'export',jobId:combined.id,formats:['full']});const json=JSON.parse(await full.files[0].file.text());
+  assert.equal(json.partial,true);assert.ok(json.sources.some(source=>source.status==='paused'));assert.equal(json.message_count,3);
+ }
+});
+
+test('actual WASM converts original legacy HTML and retains ID-less rows when updated from the same file',async t=>{
+ const engine=await import('../wasm/archive_engine.js');await engine.default({module_or_path:await readFile(new URL('../wasm/archive_engine_bg.wasm',import.meta.url))});
+ const {worker,storage}=await setup({engine});t.after(()=>storage.close());
+ const file=new File(["<html><body><div class='chatlog'><div class='chatlog__message-container'><div><img class='chatlog__avatar' src='https://cdn.discordapp.com/avatars/42/x.png'></div><div><span class='chatlog__author'>Display</span><span class='chatlog__timestamp'>10:00</span>Hello</div></div><div class='chatlog__message-container'><div>10:01</div><div>Second</div></div></div></body></html>"],'original.html');
+ const base=await worker.dispatch({type:'import',file});assert.equal(base.count,2);
+ const info=await worker.dispatch({type:'updateInfo',jobId:base.id,channelId:'c'});assert.equal(info.newestId,null);assert.equal(info.hasMissingIds,true);
+ const combined=await worker.dispatch({type:'merge',baseJobId:base.id,file});assert.equal(combined.count,4);assert.equal(combined.mergeStats.unidentified,4);assert.equal(combined.mergeStats.duplicates,0);
+ assert.ok((await storage.readPage(combined.id)).messages.every(message=>message.id===null));
+ const output=await worker.dispatch({type:'export',jobId:combined.id,formats:['compact']});
+ const reimported=await worker.dispatch({type:'import',file:output.files[0].file});assert.equal(reimported.count,4);
+ assert.ok((await storage.readPage(reimported.id)).messages.every(message=>message.id===null));
+});
+
+test('finish records collection reason and a reached cap keeps ready archives partial through combine',async t=>{
+ let metadata;class Meta extends Exporter{constructor(...args){super(...args);metadata=this.metadata;}}
+ const {worker,storage}=await setup({engine:{ArchiveExporter:Meta}});t.after(()=>storage.close());
+ const base=await storage.create({channel:{id:'c',name:'r'}}),incoming=await storage.create({channel:{id:'c',name:'r'}});
+ await storage.append(base.id,[msg('1')]);await storage.append(incoming.id,[msg('2')]);
+ await worker.dispatch({type:'finish',jobId:base.id,status:'ready',partial:false,reason:'end'});
+ const limited=await worker.dispatch({type:'finish',jobId:incoming.id,status:'ready',reason:'limit',partial:false});
+ assert.equal(limited.collectionReason,'limit');assert.equal(limited.partial,true);
+ const combined=await worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id});assert.equal(combined.partial,true);
+ await worker.dispatch({type:'preview',jobId:combined.id,format:'full'});assert.equal(metadata.partial,true);
+ const explicit=await worker.dispatch({type:'finish',jobId:base.id,status:'ready',reason:'end',partial:true});assert.equal(explicit.partial,true);assert.equal(explicit.collectionReason,'end');
+});
+
+test('combine rejects deleted or appended sources during paged copy and removes only its stage',async t=>{
+ for(const mutation of ['delete','append']){
+  const {worker,storage}=await setup();t.after(()=>storage.close());
+  const base=await storage.create({kind:'import',name:'Base'}),incoming=await storage.create({kind:'import',name:'Incoming'});
+  await storage.append(base.id,Array.from({length:101},(_,i)=>msg(String(i))));
+  await storage.append(incoming.id,[msg('200')]);
+  await storage.update(base.id,{status:'ready'});await storage.update(incoming.id,{status:'ready'});
+  const originalRead=storage.readPage.bind(storage);let changed=false;
+  storage.readPage=async(id,options)=>{
+   const page=await originalRead(id,options);
+   if(id===base.id&&!changed){changed=true;if(mutation==='delete')await storage.delete(base.id);else await storage.append(base.id,[msg('201')]);}
+   return page;
+  };
+  await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/source.*changed|source.*removed/i);
+  const jobs=await storage.list();assert.equal(jobs.length,mutation==='delete'?1:2);
+  assert.equal((await storage.get(incoming.id)).count,1);
+  if(mutation==='append')assert.equal((await storage.get(base.id)).count,102);
+ }
+});
+
+test('combine rechecks already-copied source metadata before completing',async t=>{
+ const {worker,storage}=await setup();t.after(()=>storage.close());
+ const base=await storage.create({kind:'import',name:'Base'}),incoming=await storage.create({kind:'import',name:'Incoming'});
+ await storage.append(base.id,[msg('1')]);await storage.append(incoming.id,[msg('2')]);
+ await storage.update(base.id,{status:'ready'});await storage.update(incoming.id,{status:'ready'});
+ const originalRead=storage.readPage.bind(storage);
+ storage.readPage=async(id,options)=>{const page=await originalRead(id,options);if(id===incoming.id)await storage.update(base.id,{status:'paused'});return page;};
+ await assert.rejects(worker.dispatch({type:'combine',baseJobId:base.id,additionalJobId:incoming.id}),/source.*changed/i);
+ assert.equal((await storage.list()).length,2);assert.equal((await storage.get(base.id)).status,'paused');
 });

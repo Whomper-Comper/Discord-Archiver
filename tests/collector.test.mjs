@@ -78,3 +78,14 @@ test('a capture job can only be resumed by one workspace even from different tab
     release();await first;
     await withCaptureJobLock(locks,'same-job',async()=>{});
 });
+
+test('incremental updates stop at the known newest message ID and keep only newer messages',async()=>{
+    const calls=[],saved=[];
+    const result=await runCollection({settings:{...defaults(),afterId:'2'},fetchPage:async(before,limit)=>{calls.push([before,limit]);return ok(calls.length===1?[msg('4'),msg('3'),msg('2'),msg('1')]:[]);},saveBatch:async(messages,checkpoint)=>saved.push({messages,checkpoint}),sleep:async()=>{}});
+    assert.equal(calls.length,1);
+    assert.deepEqual(saved[0].messages.map(message=>message.id),['4','3']);
+    assert.equal(result.reason,'boundary');
+    assert.equal(result.scanned,4);
+    assert.equal(result.cursor,'1');
+    assert.throws(()=>normalizeSettings({afterId:'bad-id'}));
+});

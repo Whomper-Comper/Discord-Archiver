@@ -467,3 +467,63 @@ fn legacy_literal_unknown_author_is_not_grouped_into_previous_identity() {
         assert_eq!(record["author"]["display_name"], "Unknown");
     }
 }
+
+fn import_finish_metadata(kind: &str, input: &str) -> Value {
+    let mut importer = ArchiveImporter::new(kind, &channel()).unwrap();
+    for scalar in input.chars() {
+        let response: Value =
+            serde_json::from_str(&importer.feed(&scalar.to_string()).unwrap()).unwrap();
+        assert!(response.get("source_metadata").is_none());
+    }
+    serde_json::from_str(&importer.finish().unwrap()).unwrap()
+}
+#[test]
+fn source_metadata_roundtrips_partial_history_without_settings_or_tokens() {
+    let metadata = json!({"channel":{"id":"chan","name":"General"},"status":"ready","partial":true,"source":{"kind":"import","name":"current.json","token":"SECRET"},"sources":[{"kind":"capture","name":"original","status":"paused","partial":true,"settings":{"token":"SECRET"},"token":"SECRET"}],"settings":{"token":"SECRET"}});
+    for format in ["full", "compact", "html"] {
+        let mut e = ArchiveExporter::new(format, "{}", &metadata.to_string()).unwrap();
+        let input = e.begin().unwrap() + &e.push(&normalized()).unwrap() + &e.finish().unwrap();
+        let finish = import_finish_metadata(if format == "html" { "html" } else { "json" }, &input);
+        let sm = &finish["source_metadata"];
+        assert_eq!(sm["partial"], true);
+        assert_eq!(sm["status"], "ready");
+        assert_eq!(
+            sm["sources"],
+            json!([{"kind":"capture","name":"original","status":"paused","partial":true}])
+        );
+        assert!(!sm.to_string().contains("settings"));
+        assert!(!sm.to_string().contains("SECRET"));
+    }
+    let global = format!(
+        "<script id='discord-archive-data'>{{\"messages\":[{}],\"status\":\"paused\",\"source\":{{\"kind\":\"capture\",\"name\":\"Old capture\"}}}}</script>",
+        raw()
+    );
+    let sm = import_finish_metadata("html", &global)["source_metadata"].clone();
+    assert_eq!(sm["status"], "paused");
+    assert_eq!(sm["partial"], true);
+    assert_eq!(sm["sources"][0]["name"], "Old capture");
+}
+#[test]
+fn source_metadata_rejects_malformed_known_types_and_tracks_nested_partial() {
+    for bad in [
+        json!({"partial":"true"}),
+        json!({"status":false}),
+        json!({"sources":{}}),
+        json!({"sources":[42]}),
+        json!({"sources":[{"name":42}]}),
+        json!({"sources":[{"partial":"true"}]}),
+        json!({"sources":[{"status":42}]}),
+        json!({"source":42}),
+    ] {
+        let mut v = bad;
+        v["messages"] = json!([]);
+        assert!(stream("json", &v.to_string()).is_err(), "accepted {v}");
+        let html = format!("<script id='archive-metadata'>{}</script>", v);
+        assert!(stream("html", &html).is_err(), "accepted html {v}");
+    }
+    let sm=import_finish_metadata("json","{\"partial\":false,\"status\":\"ready\",\"sources\":[{\"name\":\"old\",\"status\":\"paused\"}],\"messages\":[]}")["source_metadata"].clone();
+    assert_eq!(sm["partial"], true);
+    assert_eq!(sm["sources"][0]["status"], "paused");
+    let empty = import_finish_metadata("json", "[]");
+    assert!(empty.get("source_metadata").is_none());
+}

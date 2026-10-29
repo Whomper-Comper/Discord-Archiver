@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-29",
+  "scope": "Production worker and WASM on secure localhost in Chromium, real IndexedDB and OPFS. Synthetic JSONL. Not a live Discord or Firefox benchmark.",
+  "inputBytes": 500006376,
+  "records": 59688,
+  "format": "compact",
+  "savedRecords": 59688,
+  "validatedRecords": 59688,
+  "firstId": "1000000000",
+  "lastId": "1000059687",
+  "outputBytes": 494754674,
+  "importSeconds": 38.754199999999955,
+  "exportSeconds": 34.72069999999995,
+  "validationSeconds": 13.99290000000014,
+  "wasmMemoryPeak": 3473408,
+  "sampledBrowserWorkingSetPeakBytes": 453287936,
+  "workingSetNote": "Sum of sampled Windows browser process working sets; shared pages may be counted more than once."
+}

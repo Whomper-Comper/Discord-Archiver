@@ -1,4 +1,4 @@
-# Discord Archiver 2.0
+# Discord Archiver 2.1
 
 [Whomper-Comper's fork](https://github.com/Whomper-Comper/Discord-Archiver) adds a local archive workspace powered by packaged Rust/WebAssembly. Collect a Discord channel or parse an existing archive, choose authors, preview results, and prepare downloads. Large imports and exports use a worker, IndexedDB, and the browser's private file system (OPFS).
 
@@ -33,6 +33,18 @@ Use **Pause / cancel** to interrupt collection, waits, imports, or exports. Coll
 Import saved `.html`/`.htm`, `.json`, `.jsonl`, or `.ndjson` files. JSON supports API arrays, full documents with a `messages` array, and compact exports. Gzip files such as `.json.gz` and `.jsonl.gz` are decoded while importing when the browser supports `DecompressionStream`. Failed or cancelled imports discard their staging job; interrupted imports left after a restart can be selected for deletion, but cannot be exported as complete.
 
 Cached jobs remain on this device until **Delete cache** is used. Deleting a cache does not remove files already downloaded to your computer. Capture exports are oldest first; imported files retain their input order.
+
+## Update an existing archive or convert original HTML
+
+1. Choose **Organize a file** and import your original HTML or JSON, or select a saved cache and click **Use selected**. Original-extension HTML is supported; no conversion step outside the workspace is needed.
+2. Under **Saved in this browser**, open **Add more messages**. Choose **Add messages from a file**, or select another saved archive and click **Combine archives**.
+3. A new combined archive becomes selected. Your original caches and source files remain available. Export it as compact JSON, updated HTML, or any other supported format.
+
+Messages from the base archive appear first, followed by incoming messages in their saved order. Known channel/message ID pairs are deduplicated; the first copy wins, so merging does not refresh edited messages or remove deleted messages. Legacy HTML without IDs is retained as supplied, including possible overlaps. IDs, timestamps, or reply details absent from the original file cannot be reconstructed.
+
+To collect only new messages, open the workspace from the matching Discord channel, select your archive, and click **Fetch newer messages**. Collection starts at the latest message and stops at the newest saved ID for that channel. It uses the request size, pacing, fetched-message cap, and user ID settings; date and start-before fields are ignored. It does not fill older gaps. A reached message cap is marked as partial history. Archives without saved IDs for this channel can still be converted or combined with another file.
+
+Pause and resume use the saved update boundary. After collection, the workspace combines the new messages automatically. If combining fails or is cancelled, the new collection stays in the cache: select it and use **Finish saved update**, or combine the saved archives manually. A combined copy preserves partial-history/source information from its inputs. It needs disk space for both the originals and the combined result.
 
 ## Export for AI analysis or offline reading
 
@@ -73,12 +85,18 @@ The [500 MB measurement](docs/benchmark-500mb.json), recorded on 2026-10-29, use
 | Measurement | Result |
 | --- | --- |
 | Synthetic JSONL input | 500,006,376 bytes; 59,688 records |
-| Compact output | 494,754,674 bytes; all 59,688 records revalidated |
-| Import / export / validation | 38.8 s / 34.7 s / 14.0 s |
+| Compact output | 494,754,707 bytes; all 59,688 records revalidated |
+| Import / export / validation | 46.7 s / 34.5 s / 13.5 s |
 | Peak WASM linear memory | 3.3 MiB |
-| Sampled browser working sets | About 432 MiB across browser processes |
+| Sampled browser working sets | About 655 MiB across browser processes |
 
-The working-set total can count shared pages more than once and is not the WASM memory figure. These are synthetic measurements, not a live Discord, Firefox, or extension-origin performance result. The extension-origin Chrome for Testing run was blocked by a Windows SideBySide launch error; the secure-localhost browser fallback passed. Timing and memory depend on browser, hardware, content, and storage. The large fixture is mostly long message text, so its compact size reduction is much smaller than the short-message example above.
+The earlier [2.0 measurement](docs/benchmark-500mb-v2.0.json) is retained for
+reference. Browser/runtime and concurrent activity differ between runs, so these
+reports are not a controlled before/after speed comparison.
+
+The working-set total can count shared pages more than once and is not the WASM memory figure. These are synthetic measurements, not a live Discord, Firefox, or extension-origin performance result. The workspace also passed a separate actual MV3 extension smoke test in Edge, covering imports, merging, filtering, exports and gzip. Live update orchestration uses synthetic pages in that test; it does not access a Discord account. Timing and memory depend on browser, hardware, content, and storage. The large fixture is mostly long message text, so its compact size reduction is much smaller than the short-message example above.
+
+Selected-author reads now use an index instead of scanning every message. A separate [10,000-record Edge measurement](docs/performance-author-index.json), with one author owning 1% of records, reduced cursor visits from 10,099 to 100 and median read time from 490.1 ms to 5.5 ms. These timings are specific to the test. Existing caches upgrade automatically without deleting records; a large cache can take time on its first opening after an upgrade.
 
 ## Build and verify
 
@@ -110,6 +128,14 @@ npm run benchmark
 ```
 
 Browser artifacts are written under `artifacts/`. The benchmark generates its own input, validates exported record counts and endpoint IDs, and writes `docs/benchmark-500mb.json`. It deletes its generated input unless `KEEP_BENCHMARK_INPUT` is set. These checks do not make live Discord requests.
+
+## More documentation
+
+- [Export formats, compact legend and fidelity](docs/EXPORT_FORMATS.md)
+- [Troubleshooting and recovery](docs/TROUBLESHOOTING.md)
+- [Architecture and module responsibilities](docs/ARCHITECTURE.md)
+- [Contributing, verification and packaging](CONTRIBUTING.md)
+- [Contributor and agent guide](AGENTS.md)
 
 ## Account automation and license
 

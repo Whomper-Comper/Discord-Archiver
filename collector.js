@@ -12,7 +12,7 @@ export async function withCaptureJobLock(locks,jobId,operation){
 }
 
 export function normalizeSettings(raw = {}) {
-    const result={...PRESETS.balanced,maxMessages:0,afterDate:'',beforeDate:'',beforeId:'',userIds:[],...raw};
+    const result={...PRESETS.balanced,maxMessages:0,afterDate:'',beforeDate:'',beforeId:'',afterId:'',userIds:[],...raw};
     for (const [key,min,max] of [['batchSize',1,100],['intervalMs',0,60000],['timeoutMs',1000,120000],['maxRetries',0,10],['maxMessages',0,1000000000]]) {
         const value=Number(result[key]);
         if (!Number.isSafeInteger(value)||value<min||value>max) throw new Error(`${key} must be an integer from ${min} to ${max}.`);
@@ -25,6 +25,8 @@ export function normalizeSettings(raw = {}) {
     if (result.afterDate && result.beforeDate && result.afterDate>=result.beforeDate) throw new Error('The start date must be before the end date.');
     result.beforeId=String(result.beforeId||'').trim();
     if (result.beforeId && !/^\d{1,20}$/.test(result.beforeId)) throw new Error('Starting message ID must contain only digits.');
+    result.afterId=String(result.afterId||'').trim();
+    if(result.afterId&&!/^\d{1,20}$/.test(result.afterId))throw new Error('The update boundary message ID must contain only digits.');
     const ids=Array.isArray(result.userIds)?result.userIds:String(result.userIds||'').split(/[\s,]+/);
     result.userIds=[...new Set(ids.map(String).map(s=>s.trim()).filter(Boolean))];
     if (result.userIds.some(id=>!/^\d{1,20}$/.test(id))) throw new Error('User IDs must contain only digits, separated by commas or spaces.');
@@ -44,6 +46,7 @@ export async function runCollection({settings:raw,cursor=null,scanned=0,fetchPag
     const settings=normalizeSettings(raw);
     const after=settings.afterDate?Date.parse(settings.afterDate):null;
     const before=settings.beforeDate?Date.parse(settings.beforeDate):null;
+    const afterId=settings.afterId?BigInt(settings.afterId):null;
     if (!cursor) {
         cursor=settings.beforeId||null;
         if (before!==null) {
@@ -55,6 +58,7 @@ export async function runCollection({settings:raw,cursor=null,scanned=0,fetchPag
     let retries=0;
     try {
         while (!signal?.aborted) {
+            if(afterId!==null&&cursor&&BigInt(cursor)<=afterId)return {status:'ready',cursor,scanned,reason:'boundary'};
             if (settings.maxMessages && scanned>=settings.maxMessages) return {status:'ready',cursor,scanned,reason:'limit'};
             const limit=settings.maxMessages?Math.min(settings.batchSize,settings.maxMessages-scanned):settings.batchSize;
             let response;
@@ -79,9 +83,13 @@ export async function runCollection({settings:raw,cursor=null,scanned=0,fetchPag
             if (!messages.length) return {status:'ready',cursor,scanned,reason:'history'};
             const next=messages.at(-1)?.id;
             if (typeof next!=='string'||!/^\d{1,20}$/.test(next)||cursor&&BigInt(next)>=BigInt(cursor)) throw new Error('Discord pagination cursor did not advance; stopped to preserve saved progress.');
-            let reachedStart=false;
+            let reachedStart=false,reachedBoundary=false;
             const selected=[];
             for (const message of messages) {
+                if(afterId!==null){
+                    if(typeof message.id!=='string'||!/^\d{1,20}$/.test(message.id))throw new Error('A message has an invalid ID; the update page was not committed.');
+                    if(BigInt(message.id)<=afterId){reachedBoundary=true;continue;}
+                }
                 const time=Date.parse(message.timestamp);
                 if (!Number.isFinite(time)) throw new Error('A message has an invalid timestamp; page was not committed.');
                 if (after!==null&&time<after) {reachedStart=true;continue;}
@@ -94,6 +102,7 @@ export async function runCollection({settings:raw,cursor=null,scanned=0,fetchPag
             await saveBatch(selected,{cursor:next,scanned:nextScanned,status:'collecting'});
             cursor=next;scanned=nextScanned;
             onProgress({status:'Collecting',scanned,cursor});
+            if(reachedBoundary)return {status:'ready',cursor,scanned,reason:'boundary'};
             if (reachedStart) return {status:'ready',cursor,scanned,reason:'date'};
             if (settings.maxMessages&&scanned>=settings.maxMessages) return {status:'ready',cursor,scanned,reason:'limit'};
             let delay=settings.intervalMs;

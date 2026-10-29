@@ -1,4 +1,4 @@
-use crate::{META_LIMIT, RECORD_LIMIT, model::*, normalize::message};
+use crate::{META_LIMIT, RECORD_LIMIT, model::*, normalize::message, provenance::SourceMetadata};
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
@@ -85,6 +85,7 @@ struct JsonStream {
     file: String,
     index: usize,
     compact: bool,
+    source_metadata: SourceMetadata,
 }
 impl JsonStream {
     fn new(channel: Channel, file: String) -> Self {
@@ -100,6 +101,7 @@ impl JsonStream {
             file,
             index: 0,
             compact: false,
+            source_metadata: SourceMetadata::default(),
         }
     }
     fn complete(&mut self, t: Token, out: &mut Vec<Message>) -> Result<(), String> {
@@ -115,6 +117,7 @@ impl JsonStream {
                 if self.metadata_bytes > META_LIMIT {
                     return Err("Metadata exceeds 8 MiB".into());
                 }
+                self.source_metadata.capture(&self.key, &v)?;
                 if self.key == "channel" {
                     self.channel =
                         serde_json::from_value(v).map_err(|e| format!("Invalid channel: {e}"))?
@@ -281,6 +284,8 @@ struct HtmlStream {
     html_closed: bool,
     body_opened: bool,
     body_closed: bool,
+    source_metadata: SourceMetadata,
+    metadata_bytes: usize,
 }
 fn attr(tag: &str, name: &str) -> Option<String> {
     // Parse just the bounded start tag, respecting quotes and whitespace.
@@ -332,6 +337,11 @@ impl HtmlStream {
             1 => {
                 let p = self.json.take().unwrap();
                 p.finish()?;
+                self.metadata_bytes += p.metadata_bytes;
+                if self.metadata_bytes > META_LIMIT {
+                    return Err("Metadata exceeds 8 MiB".into());
+                }
+                self.source_metadata = p.source_metadata;
                 *ch = p.channel;
                 *index = p.index;
             }
@@ -342,6 +352,10 @@ impl HtmlStream {
                 out.push(message(v, ch, file, *index, "embedded_json")?);
             }
             3 => {
+                self.metadata_bytes += self.script_value.len();
+                if self.metadata_bytes > META_LIMIT {
+                    return Err("Metadata exceeds 8 MiB".into());
+                }
                 let v: Value = serde_json::from_str(&self.script_value)
                     .map_err(|e| format!("Invalid archive metadata: {e}"))?;
                 if !v.is_object() {
@@ -349,6 +363,11 @@ impl HtmlStream {
                 }
                 if v.get("schema_version").is_some_and(|v| v != 1) {
                     return Err("Unsupported archive metadata schema version".into());
+                }
+                for key in ["partial", "status", "sources", "source"] {
+                    if let Some(value) = v.get(key) {
+                        self.source_metadata.capture(key, value)?;
+                    }
                 }
                 self.machine_records = v["html"]["machine_data"].as_bool().unwrap_or(false);
                 if let Some(c) = v.get("channel") {
@@ -716,6 +735,16 @@ impl ArchiveImporter {
 impl ArchiveImporter {
     fn output(&self, out: Vec<Message>, end: bool) -> Result<String, String> {
         let mut v = json!({"messages":out,"channel":self.json.as_ref().map(|p|&p.channel).unwrap_or(&self.channel)});
+        if end
+            && let Some(metadata) = self
+                .json
+                .as_ref()
+                .map(|p| &p.source_metadata)
+                .unwrap_or(&self.html.source_metadata)
+                .value()
+        {
+            v["source_metadata"] = metadata;
+        }
         if end && self.kind == "html" && !self.html.machine {
             v["legacy_required"] = json!(true)
         }

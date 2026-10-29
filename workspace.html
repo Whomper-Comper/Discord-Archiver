@@ -1,39 +1,119 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Discord Archiver Workspace</title><link rel="stylesheet" href="workspace.css"><script type="module" src="workspace.js"></script></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Discord Archiver · Workspace</title>
+  <link rel="stylesheet" href="workspace.css">
+  <script type="module" src="workspace.js"></script>
+</head>
 <body>
-<header><div class="brand"><img src="icons/logo48.png" alt=""><div><h1>Discord Archiver</h1><p>Collect once. Export your way.</p></div></div><div class="badges"><span>RUST + WASM</span><span id="storage">Checking local storage…</span></div></header>
-<main>
-<div id="error" class="error" role="alert" hidden></div>
-<section class="progress-panel" aria-live="polite"><div><strong id="status">Starting the Rust engine…</strong><p id="details">Archive content stays on this device.</p></div><button id="pause" class="secondary" disabled>Pause / cancel</button><progress id="progress" hidden></progress></section>
-<div class="layout">
-<div class="sources">
-<section><div class="section-title"><span class="step">01</span><h2>Get your messages</h2></div>
-<p id="channel" class="muted">Open this workspace from a Discord channel to collect history, or import a saved archive below.</p>
-<form id="collectionForm">
-<label>Pacing preset<select id="preset"><option value="balanced">Balanced</option><option value="adaptive">Adaptive — follow Discord headers</option><option value="gentle">Gentle</option><option value="custom">Custom</option></select></label>
-<div class="two"><label>Maximum fetched messages<input id="maxMessages" type="number" min="0" max="1000000000" value="0"><small>0 collects all available history</small></label><label>Messages per page<input id="batchSize" type="number" min="1" max="100" value="100"><small>Discord permits up to 100</small></label></div>
-<div class="two"><label>From date, UTC (inclusive)<input id="afterDate" type="date" min="2015-01-01"></label><label>Before date, UTC (exclusive)<input id="beforeDate" type="date" min="2015-01-01"></label></div>
-<details><summary>Advanced collection settings</summary><div class="two"><label>Minimum interval (ms)<input id="intervalMs" type="number" min="0" max="60000" value="500"></label><label>Request timeout (ms)<input id="timeoutMs" type="number" min="1000" max="120000" value="30000"></label></div><label>Maximum consecutive retries<input id="maxRetries" type="number" min="0" max="10" value="5"></label><label>Start before message ID<input id="beforeId" inputmode="numeric" placeholder="Optional"></label><label>Only store these user IDs<input id="userIds" placeholder="Optional; comma or space separated"><small>Filtering still scans channel history. Leave blank to choose any user after collection.</small></label></details>
-<button id="collect" type="submit">Collect channel history</button>
-</form>
-<div class="divider">or parse and organize a saved archive</div>
-<label class="file-box">Parse HTML, JSON, JSONL, or gzip<input id="file" type="file" accept=".html,.htm,.json,.jsonl,.ndjson,.gz"><small>Choose a file to organize messages, authors, and replies. Processing is streamed, including large files. Legacy HTML may lack IDs and exact reply data.</small></label>
-</section>
-<section><div class="section-title"><span class="step">02</span><h2>Saved on this device</h2></div><label>Archive<select id="jobs"><option value="">No archives yet</option></select></label><div class="actions"><button id="load" class="secondary">Use selected</button><button id="resume" class="secondary">Resume collection</button><button id="delete" class="danger">Delete cache</button></div><p id="jobInfo" class="muted">Committed collection batches remain available after closing this tab.</p><p id="warnings" class="warning"></p></section>
-</div>
-<section class="exports"><div class="section-title"><span class="step">03</span><h2>Shape your export</h2></div>
-<label>Find a user<input id="userSearch" type="search" placeholder="Name, username, or Discord ID"></label><label>Export messages from<select id="userSelect"><option value="">Everyone</option></select></label><p class="muted">Reply context is retained when selecting one author.</p>
-<fieldset><legend>Export formats</legend><div class="formats"><label><input type="checkbox" name="format" value="compact" checked> Compact JSON · AI analysis</label><label><input type="checkbox" name="format" value="compact-cleaned"> Compact cleaned JSON</label><label><input type="checkbox" name="format" value="html"> Offline HTML</label><label><input type="checkbox" name="format" value="full"> Full detail JSON</label><label><input type="checkbox" name="format" value="cleaned"> Full cleaned JSON</label><label><input type="checkbox" name="format" value="messages"> Message-only JSON</label><label><input type="checkbox" name="format" value="jsonl"> Full JSONL</label><label><input type="checkbox" name="format" value="cleaned-jsonl"> Cleaned JSONL</label><label><input type="checkbox" name="format" value="csv"> CSV</label><label><input type="checkbox" name="format" value="text"> Plain text</label></div></fieldset>
-<p class="muted">Compact JSON saves names, IDs, text, and reply relationships with short keys and one shared schema legend for AI analysis. It omits repeated source fields, empty metadata, and reply quotations when the target ID is available. Full-detail formats are optional.</p>
-<div class="two"><label>Filename prefix<input id="filename" value="discord_archive" maxlength="100"></label><label>Messages per output file<input id="splitMessages" type="number" min="0" max="1000000000" value="0"><small>0 = one data file. HTML is capped at 10,000 messages per part.</small></label></div>
-<div class="options"><label><input id="skipEmpty" type="checkbox"> Skip empty text</label><label><input id="includeMedia" type="checkbox"> Include media links</label><label><input id="includeReplyText" type="checkbox"> Include compact reply quotations</label><label><input id="pretty" type="checkbox"> Human-readable JSON</label><label><input id="gzip" type="checkbox"> Gzip compression (.gz)</label></div>
-<p class="muted">Gzip reduces storage further and must be decompressed before AI analysis. You can import gzip files here to decode them. Compression and output size depend on the content.</p>
-<details><summary>HTML quality and file size</summary><label>HTML quality<select id="htmlQuality"><option value="compact">Compact · text and reply links</option><option value="standard">Standard · embed details and media links</option><option value="rich">Rich · lazy images and media previews</option></select></label><label class="inline"><input id="includeMachineData" type="checkbox"> Preserve exact source records inside HTML (larger file)</label><p class="muted">Exact embedded records repeat message data and increase HTML size. Compact HTML keeps text and identity attributes for parsing; omitted media/details require a full-detail export.</p></details>
-<div class="actions"><button id="export">Prepare downloads</button><label class="preview-select">Preview<select id="previewFormat"><option value="compact">Compact JSON</option><option value="compact-cleaned">Compact cleaned JSON</option><option value="full">Full JSON</option><option value="cleaned">Cleaned JSON</option><option value="messages">Message-only JSON</option><option value="jsonl">JSONL</option><option value="csv">CSV</option><option value="text">Plain text</option><option value="html">HTML source</option></select></label></div>
-<p class="muted" id="previewInfo">Preview shows up to three matching messages.</p><pre id="preview" tabindex="0">Load or collect an archive to preview it.</pre>
-<div id="downloads" aria-live="polite"></div>
-<button id="clearExports" class="secondary">Clear prepared export files</button>
-</section>
-</div>
-<footer>Processing runs in a worker with a disk-backed cache. Keep this workspace open while a job is running. Server rate limits always take precedence over pacing settings. <a href="https://github.com/Whomper-Comper/Discord-Archiver" target="_blank" rel="noreferrer">Source &amp; documentation</a></footer>
-</main></body></html>
+  <header class="app-header">
+    <div class="brand"><img src="icons/logo48.png" alt=""><div><span class="eyebrow">DISCORD ARCHIVER</span><h1>Your archive workspace</h1><p>Bring conversations together. Keep the details that matter.</p></div></div>
+    <div class="header-meta"><span class="local-badge"><span aria-hidden="true"></span>On-device processing</span><span id="storage">Checking local storage…</span></div>
+  </header>
+  <main id="workspace" aria-busy="true">
+    <div id="error" class="error" role="alert" hidden><div><strong>Couldn’t complete that operation</strong><p id="errorMessage"></p></div><button id="dismissError" class="icon-button" type="button" aria-label="Dismiss error">×</button></div>
+
+    <section class="progress-panel" aria-label="Operation progress">
+      <div class="progress-copy" aria-live="polite"><span id="operationBadge" class="status-badge">Starting</span><strong id="status">Getting your workspace ready…</strong><p id="details">Existing caches may take a moment to upgrade. Your messages stay on this device.</p></div>
+      <div class="progress-actions"><span id="elapsed" class="muted" hidden></span><button id="pause" class="secondary" type="button" disabled>Pause / cancel</button></div>
+      <div id="progressTrack" class="progress-track" hidden><progress id="progress" aria-label="Processing progress" hidden></progress><span id="progressPercent"></span></div>
+    </section>
+
+    <section class="archive-overview" aria-label="Selected archive summary">
+      <div><span class="metric-label">Current archive</span><strong id="summaryArchive">No archive selected</strong></div>
+      <div><span class="metric-label">Saved messages</span><strong id="summaryMessages">—</strong></div>
+      <div><span class="metric-label">Export scope</span><strong id="summaryScope">All authors</strong></div>
+      <div><span class="metric-label">Archive state</span><strong id="summaryState">Choose a source</strong></div>
+    </section>
+
+    <div class="layout">
+      <aside class="sources" aria-label="Archive sources">
+        <section class="card source-card">
+          <div class="section-title"><span class="step">01</span><div><h2>Choose your source</h2><p>Collect a channel or organize a file you already have.</p></div></div>
+          <div class="source-switch" role="tablist" aria-label="Message source">
+            <button id="modeCollect" type="button" role="tab" aria-label="Collect from Discord" aria-controls="collectPanel" aria-selected="false" tabindex="-1"><span>Collect from Discord</span><small>Live channel history</small></button>
+            <button id="modeImport" type="button" role="tab" aria-label="Organize a file" aria-controls="importPanel" aria-selected="true" tabindex="0"><span>Organize a file</span><small>HTML, JSON, or gzip</small></button>
+          </div>
+          <div id="collectPanel" role="tabpanel" aria-labelledby="modeCollect" hidden>
+            <p id="channel" class="source-context">Open a Discord channel and launch its workspace from the extension.</p>
+            <form id="collectionForm">
+              <label>Pacing preset<select id="preset"><option value="balanced">Balanced</option><option value="adaptive">Adaptive — follow Discord headers</option><option value="gentle">Gentle</option><option value="custom">Custom</option></select></label>
+              <div class="two"><label>Maximum fetched messages<input id="maxMessages" type="number" min="0" max="1000000000" value="0"><small>0 = all available history</small></label><label>Messages per request<input id="batchSize" type="number" min="1" max="100" value="100"><small>Up to 100 per Discord request</small></label></div>
+              <div class="two"><label>From date · UTC, inclusive<input id="afterDate" type="date" min="2015-01-01"></label><label>Before date · UTC, exclusive<input id="beforeDate" type="date" min="2015-01-01"></label></div>
+              <details class="settings-details"><summary>Fine-tune collection</summary><div class="details-body">
+                <div class="two"><label>Minimum interval (ms)<input id="intervalMs" type="number" min="0" max="60000" value="500"></label><label>Request timeout (ms)<input id="timeoutMs" type="number" min="1000" max="120000" value="30000"></label></div>
+                <label>Consecutive retries<input id="maxRetries" type="number" min="0" max="10" value="5"></label>
+                <label>Start before message ID<input id="beforeId" inputmode="numeric" placeholder="Optional"></label>
+                <label>Only store these user IDs<input id="userIds" placeholder="IDs separated by commas or spaces"><small>This still scans channel history. Leave blank to choose an author later.</small></label>
+              </div></details>
+              <button id="collect" class="primary full-width" type="submit">Collect channel history</button>
+            </form>
+          </div>
+          <div id="importPanel" role="tabpanel" aria-labelledby="modeImport">
+            <div id="fileDrop" class="file-drop">
+              <span class="file-glyph" aria-hidden="true">↥</span><h3>Give your archive some structure</h3><p>Drop a saved file here to organize messages, authors, and replies.</p>
+              <label class="file-select">Choose archive file<input id="file" type="file" accept=".html,.htm,.json,.jsonl,.ndjson,.gz"><span class="sr-only">HTML, JSON, JSONL, NDJSON, or gzip</span></label>
+              <small>HTML · JSON · JSONL · NDJSON · Gzip</small>
+            </div>
+            <p class="muted source-note">Large files are processed in small batches. Older HTML may not contain exact message IDs or complete reply details.</p>
+          </div>
+        </section>
+
+        <section class="card saved-card">
+          <div class="section-title"><span class="step">02</span><div><h2>Saved in this browser</h2><p>Return to an archive without starting over.</p></div></div>
+          <label>Available archives<select id="jobs"><option value="">No archives yet</option></select></label>
+          <div class="actions cache-actions"><button id="load" class="secondary" type="button">Use selected</button><button id="resume" class="secondary" type="button">Resume collection</button><button id="delete" class="quiet-danger" type="button">Delete cache</button></div>
+          <p id="jobInfo" class="muted">Your committed collection progress is saved here.</p><p id="warnings" class="warning"></p>
+          <details class="settings-details update-details"><summary>Add more messages</summary><div class="details-body">
+            <p id="updateTarget" class="field-note">Choose a saved archive first. Updates create a new combined copy.</p>
+            <label class="file-select">Add messages from a file<input id="mergeFile" type="file" accept=".html,.htm,.json,.jsonl,.ndjson,.gz"><span class="sr-only">Combine another archive file with the current archive</span></label>
+            <div class="two"><label>Or combine a saved archive<select id="combineWith"><option value="">Choose another archive</option></select></label><button id="combineSaved" class="secondary" type="button">Combine archives</button></div>
+            <button id="fetchNewer" class="secondary full-width" type="button">Fetch newer messages</button>
+            <button id="finishUpdate" class="secondary full-width" type="button" hidden>Finish saved update</button>
+            <p id="updateInfo" class="field-note">Open this workspace from a Discord channel to check for newer messages.</p>
+            <p class="field-note">Known message IDs prevent duplicates. Older HTML without IDs is kept as supplied; overlapping messages may repeat. Export the combined copy in any format below.</p>
+          </div></details>
+        </section>
+      </aside>
+
+      <section class="card exports" aria-labelledby="exportTitle">
+        <div class="section-title"><span class="step">03</span><div><h2 id="exportTitle">Make it ready for analysis</h2><p>Choose the people, detail, and file format you need.</p></div></div>
+        <div id="exportEmpty" class="empty-state"><strong>Your next export starts here</strong><p>Choose a source on the left. Compact JSON is already selected for a smaller, AI-friendly dataset.</p></div>
+        <div class="two author-controls"><label>Find an author<input id="userSearch" type="search" placeholder="Name, username, or ID" autocomplete="off"></label><label>Messages to include<select id="userSelect"><option value="">Everyone</option></select></label></div>
+        <p class="field-note">Reply relationships stay attached when you choose a single author.</p>
+        <fieldset class="format-fieldset"><legend>Choose export formats</legend><div class="formats">
+          <label class="format-card"><input type="checkbox" name="format" value="compact" checked><span><strong>Compact JSON <em>Recommended</em></strong><small>Short keys and a shared legend for AI analysis</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="compact-cleaned"><span><strong>Compact cleaned JSON</strong><small>Compact text with images and emoji removed</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="html"><span><strong>Offline HTML</strong><small>A searchable conversation to read in a browser</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="full"><span><strong>Full detail JSON</strong><small>All available normalized message fields</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="cleaned"><span><strong>Full cleaned JSON</strong><small>Structured records with cleaned message content</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="messages"><span><strong>Message-only JSON</strong><small>Only the message strings, without metadata</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="jsonl"><span><strong>Full JSONL</strong><small>One record per line for streaming analysis</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="cleaned-jsonl"><span><strong>Cleaned JSONL</strong><small>Cleaned records, one per line</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="csv"><span><strong>CSV</strong><small>Message, author, and reply columns</small></span></label>
+          <label class="format-card"><input type="checkbox" name="format" value="text"><span><strong>Plain text</strong><small>Message bodies separated by blank lines</small></span></label>
+        </div></fieldset>
+        <details class="settings-details export-details"><summary>Output size and detail</summary><div class="details-body">
+          <div class="two"><label>Filename prefix<input id="filename" value="discord_archive" maxlength="100"></label><label>Messages per output file<input id="splitMessages" type="number" min="0" max="1000000000" value="0"><small>0 = one data file. HTML parts contain at most 10,000 messages.</small></label></div>
+          <div class="options"><label><input id="skipEmpty" type="checkbox"> Skip empty text</label><label><input id="includeMedia" type="checkbox"> Include media links</label><label><input id="includeReplyText" type="checkbox"> Keep compact reply quotations</label><label><input id="pretty" type="checkbox"> Human-readable JSON</label><label><input id="gzip" type="checkbox"> Gzip compression (.gz)</label></div>
+          <p class="field-note">Gzip saves storage and must be decoded before AI analysis. You can import gzip files here to decode them.</p>
+          <label>HTML quality<select id="htmlQuality"><option value="compact">Compact · text and reply links</option><option value="standard">Standard · embed details and media links</option><option value="rich">Rich · lazy images and media previews</option></select></label>
+          <label class="inline"><input id="includeMachineData" type="checkbox"> Preserve exact source records inside HTML</label><p class="field-note">Exact embedded records repeat data and make HTML larger. Compact HTML keeps visible text and saved identities for parsing; omitted detail needs a full export.</p>
+        </div></details>
+        <div class="export-action"><button id="export" class="primary" type="button">Prepare downloads</button><span id="selectionNote" class="muted">1 format selected · compact output</span></div>
+
+        <section class="preview-section" aria-label="Export preview">
+          <div class="preview-heading"><div><h3>Take a look first</h3><p id="previewInfo" class="field-note">Up to three matching messages. Your full export includes the rest.</p></div><label class="preview-select"><span class="sr-only">Preview format</span><select id="previewFormat"><option value="compact">Compact JSON</option><option value="compact-cleaned">Compact cleaned JSON</option><option value="full">Full JSON</option><option value="cleaned">Cleaned JSON</option><option value="messages">Message-only JSON</option><option value="jsonl">JSONL</option><option value="csv">CSV</option><option value="text">Plain text</option><option value="html">HTML source</option></select></label></div>
+          <pre id="preview" tabindex="0" aria-label="Read-only export preview">Load or collect an archive to preview it.</pre>
+          <div class="preview-footer"><span id="previewFeedback" class="muted" aria-live="polite">Preview formatting does not increase your output file size.</span><button id="copyPreview" class="text-button" type="button" disabled>Copy preview</button></div>
+        </section>
+        <section id="downloadPanel" class="download-panel" aria-label="Prepared downloads" hidden><div class="download-heading"><div><h3>Ready to save</h3><p id="downloadSummary" class="muted"></p></div><button id="downloadAll" class="secondary" type="button">Save all files</button></div><div id="downloads" aria-live="polite"></div><p class="field-note">Your browser may ask before saving several files.</p></section>
+        <button id="clearExports" class="text-button cleanup-button" type="button">Clear prepared export files</button>
+      </section>
+    </div>
+    <footer>Archives and prepared files stay in this browser. Keep this workspace open while processing. Discord’s pacing limits always apply. <a href="https://github.com/Whomper-Comper/Discord-Archiver" target="_blank" rel="noreferrer">Documentation &amp; source</a></footer>
+  </main>
+</body>
+</html>

@@ -17,13 +17,25 @@ export const userKey = author => author?.id != null ? `id:${author.id}` : `name:
 export class ArchiveStorage {
   static async open({indexedDB = globalThis.indexedDB, IDBKeyRange = globalThis.IDBKeyRange, name = 'discord-archive-cache'} = {}) {
     if (!indexedDB || !IDBKeyRange) throw new Error('IndexedDB disk storage is unavailable. Open the extension workspace in a supported browser.');
-    const opening = indexedDB.open(name, 1);
-    opening.onupgradeneeded = () => {
+    const opening = indexedDB.open(name, 2);
+    opening.onupgradeneeded = event => {
       const db = opening.result;
-      db.createObjectStore('jobs', {keyPath:'id'});
-      const messages = db.createObjectStore('messages', {keyPath:['jobId','order']});
-      messages.createIndex('identity', ['jobId','identity'], {unique:true});
-      db.createObjectStore('users', {keyPath:['jobId','key']});
+      if (event.oldVersion < 1) {
+        db.createObjectStore('jobs', {keyPath:'id'});
+        const messages = db.createObjectStore('messages', {keyPath:['jobId','order']});
+        messages.createIndex('identity', ['jobId','identity'], {unique:true});
+        db.createObjectStore('users', {keyPath:['jobId','key']});
+      }
+      const messages = opening.transaction.objectStore('messages');
+      messages.createIndex('authorOrder', ['jobId','authorKey','order']);
+      // Upgrade atomically: old cache stays v1 if any write fails. Read/update one
+      // record at a time so migration never collects the archive in JS memory.
+      const cursor = messages.openCursor();
+      cursor.onsuccess = () => {
+        const current = cursor.result; if (!current) return;
+        const row = current.value; row.authorKey = userKey(row.message.author);
+        current.update(row).onsuccess = () => current.continue();
+      };
     };
     const db = await request(opening);
     db.onversionchange = () => db.close();
@@ -74,7 +86,7 @@ export class ArchiveStorage {
       const existingUsers = await Promise.all([...counts.keys()].map(key=>request(users.get([id,key]))));
       for (const {message,identity} of accepted) {
         const sequence = job.count + 1;
-        const row = {jobId:id,order:job.kind === 'capture' ? -sequence : sequence,message};
+        const row = {jobId:id,order:job.kind === 'capture' ? -sequence : sequence,authorKey:userKey(message.author),message};
         if (identity) row.identity = identity;
         messages.add(row);
         job.count++;
@@ -90,12 +102,15 @@ export class ArchiveStorage {
       job.updatedAt = new Date().toISOString(); jobs.put(job); await done; return job;
     } catch (error) { try {tx.abort();} catch {} await done.catch(()=>{}); throw error; }
   }
-  async readPage(id, {after = null, limit = 100} = {}) {
-    limit = Math.max(1,Math.min(100,Number(limit)||100));
+  async readPage(id, {after = null, limit = 100, userKey = null} = {}) {
+    limit = Math.max(1,Math.min(100,Math.floor(Number(limit)||100)));
     const tx = this.db.transaction('messages'); const store = tx.objectStore('messages');
+    const source = userKey == null ? store : store.index('authorOrder');
+    const range = userKey == null ? this.range(id,after)
+      : this.ranges.bound([id,userKey,after ?? -Infinity],[id,userKey,Infinity],after != null,false);
     const messages = []; let next = null;
     await new Promise((resolve,reject) => {
-      const cursor = store.openCursor(this.range(id,after));
+      const cursor = source.openCursor(range);
       cursor.onerror = () => reject(cursor.error);
       cursor.onsuccess = () => {
         const current = cursor.result;
@@ -105,6 +120,36 @@ export class ArchiveStorage {
       };
     });
     return {messages,next};
+  }
+  async updateInfo(id, channelId, {check = () => {}} = {}) {
+    const job = await this.get(id); if (!job) throw new Error('Archive job was not found');
+    if (channelId == null || String(channelId) === '') throw new Error('Choose the Discord channel to update');
+    channelId = String(channelId);
+    let newestId = null, newestNumber = '', identifiedCount = 0, hasNonNumericIds = false;
+    // The identity index contains [jobId, JSON.stringify([channelId,messageId])].
+    // A key cursor never materializes message bodies and keeps only the maximum.
+    await new Promise((resolve,reject) => {
+      const cursor = this.db.transaction('messages').objectStore('messages').index('identity')
+        .openKeyCursor(this.ranges.bound([id,''],[id,'\uffff']));
+      cursor.onerror = () => reject(cursor.error);
+      cursor.onsuccess = () => {
+        try {
+          check();const current = cursor.result; if (!current) {resolve();return;}
+          identifiedCount++;
+          const [channel,messageId] = JSON.parse(current.key[1]);
+          if (channel === channelId) {
+            if (/^\d+$/.test(messageId)) {
+              const numeric = messageId.replace(/^0+/,'') || '0';
+              if (newestId === null || numeric.length > newestNumber.length || (numeric.length === newestNumber.length && numeric > newestNumber)) {
+                newestId = messageId; newestNumber = numeric;
+              }
+            } else hasNonNumericIds = true;
+          }
+          current.continue();
+        } catch(error) {reject(error);}
+      };
+    });
+    return {job,channelId,newestId,hasMissingIds:identifiedCount < job.count,hasNonNumericIds};
   }
   async summary(id, search = '') {
     const job = await this.get(id); if (!job) throw new Error('Archive job was not found');
