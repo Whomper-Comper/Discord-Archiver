@@ -4,6 +4,30 @@ All notable changes to Discord Archiver are documented here.
 
 ---
 
+## [2.0.0] - 2026-10-29
+
+### Added
+
+- Full archive workspace with packaged Rust/WebAssembly processing, disk-backed IndexedDB caches, streamed OPFS exports, previews, and saved collection/export preferences.
+- Sequential collection with pacing profiles, custom intervals/timeouts/retries, UTC date bounds, message/user ID filters, fetched-message caps, pause, and explicit resume from committed checkpoints using original settings.
+- Streaming imports of saved HTML, JSON, JSONL/NDJSON, and gzip; staged imports reject malformed or truncated input and retain existing good archives.
+- Compact and compact cleaned JSON with one shared legend and short record keys for AI analysis; optional full/cleaned JSON, JSONL, message-only JSON, CSV, text, and offline HTML.
+- Author search/selection, output splitting, compact/standard/rich HTML quality, optional exact embedded HTML records, reply quotations, media links, pretty JSON, and streamed gzip.
+- Explicit cache deletion and prepared-export cleanup, source/build instructions, automated JavaScript/Rust/WASM checks, and a real-worker 500 MB benchmark with recorded scope and memory measurements.
+
+### Changed
+
+- Compact minified JSON is the only initial export choice. Media links, reply quotations, HTML machine data, and gzip are opt-in.
+- Packaged WASM assets allow installation without Rust or Node.js. The update check now uses this fork's releases.
+- Retained the original Quick HTML JavaScript overlay as a small-export compatibility route; workspace large-file processing uses the new worker pipeline.
+
+### Verification scope
+
+- Synthetic 500,006,376-byte input: 59,688 records imported and revalidated, with a 494,754,674-byte compact export. Import/export/validation took 38.8/34.7/14.0 seconds; peak WASM memory was 3.3 MiB and sampled browser working sets totaled about 432 MiB.
+- Measured using real WASM, IndexedDB, and OPFS on secure localhost in Chromium. Live Discord, Firefox, and extension-origin performance remain unverified; the extension-origin Chrome for Testing launch hit a Windows SideBySide error. See README and `docs/benchmark-500mb.json` for limits.
+
+---
+
 ## [1.2.0] - 2026-03-24
 
 ### Fixed

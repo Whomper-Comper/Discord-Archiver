@@ -5,7 +5,7 @@ const api = typeof browser !== 'undefined' ? browser : chrome;
 // API to see if a newer tag exists. All requests go directly from the browser
 // to GitHub — nothing is proxied or logged.
 const GITHUB_RELEASES_URL =
-    'https://api.github.com/repos/rroy676/Discord-Archiver/releases/latest';
+    'https://api.github.com/repos/Whomper-Comper/Discord-Archiver/releases/latest';
 
 const parseVersion = v => (v || '').replace(/^v/, '').split('.').map(Number);
 
@@ -46,6 +46,27 @@ async function checkForUpdate() {
 
 // ── Main ───────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
+    const workspaceBtn = document.getElementById('workspaceBtn');
+    workspaceBtn?.addEventListener('click', async () => {
+        try {
+            const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+            const target = new URL(api.runtime.getURL('workspace.html'));
+            if (tab?.url) {
+                const source = new URL(tab.url);
+                const match = source.pathname.match(/^\/channels\/(?:@me|\d+)\/(\d+)/);
+                if (/(^|\.)discord\.com$/.test(source.hostname) && match) {
+                    target.searchParams.set('tabId', String(tab.id));
+                    target.searchParams.set('channelId', match[1]);
+                    target.searchParams.set('name', (tab.title || 'Discord channel').split(' | ')[0].replace(/^#/, ''));
+                }
+            }
+            await api.tabs.create({ url: target.href });
+            window.close();
+        } catch (error) {
+            const status = document.getElementById('status');
+            status.textContent = String(error.message || error);status.className = 'error';status.style.display = 'block';
+        }
+    });
     const downloadBtn = document.getElementById('downloadBtn');
     const statusDiv   = document.getElementById('status');
 
@@ -68,7 +89,8 @@ window.addEventListener('load', () => {
         try {
             const [tab] = await api.tabs.query({ active: true, currentWindow: true });
 
-            if (!tab?.url?.includes('discord.com')) {
+            const source = tab?.url ? new URL(tab.url) : null;
+            if (!source || !/(^|\.)discord\.com$/.test(source.hostname) || !/^\/channels\/(?:@me|\d+)\/\d+/.test(source.pathname)) {
                 setStatus('Please open a Discord channel first.', 'error');
                 return;
             }
