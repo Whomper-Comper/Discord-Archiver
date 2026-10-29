@@ -67,7 +67,7 @@
 - [x] Review independently; fix important regressions with reproductions.
 - [x] Run JavaScript tests, Rust/WASM checks appropriate to actual changes, and browser smoke. Run a scoped performance comparison; rerun the 500 MB pipeline only if storage changes justify it.
 - [x] Add lightweight CI for the established checks if it can be kept reproducible.
-- [ ] Update version/changelog, rebuild installable ZIP, commit and push the existing feature branch. No main merge or store publication.
+- [x] Update version/changelog, rebuild installable ZIP, commit and push the existing feature branch. No main merge or store publication.
 
 ## Verification record
 
@@ -78,3 +78,4 @@
 - Sparse-author Edge storage benchmark: 10,099→100 cursor visits, 490.1→5.5 ms median, identical selection/order fingerprint. Separate scoped measurement, not a whole-pipeline speedup claim.
 - Independent review reproduced and fixed concurrent source deletion/append/status changes during merging. Both source counts and metadata are rechecked before publishing a combined cache.
 - Eight user documents / 26 local file links and code fences checked. Version 2.1.0 ZIP inspected: 34 entries, all required runtime/WASM/docs present.
+- Implementation pushed to `feat/rust-wasm-streaming-exports` as `beb0b2e`. Automated workflow added; local verification above passed, remote CI outcome was not checked.
