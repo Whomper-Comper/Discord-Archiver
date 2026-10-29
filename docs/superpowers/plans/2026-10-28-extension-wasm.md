@@ -36,39 +36,40 @@ attributes. The existing file import workflow is explicitly labeled parse/organi
 Files: `rust/**`, `wasm/**`, `scripts/build-wasm.ps1`.
 Interfaces: exact ABI in `docs/extension-interfaces.md`.
 
-- [ ] Write failing Rust tests for incremental JSON/JSONL/HTML imports, legacy grouping, normalizing API records, full/cleaned/raw/JSONL/CSV/text/HTML exports, filters, escaping, bounded records, and truncation.
-- [ ] Implement `ArchiveImporter`, `ArchiveExporter`, `normalize_batch`; run native tests and wasm32 release build.
-- [ ] Generate web-target bindings at `wasm/archive_engine.js` and `wasm/archive_engine_bg.wasm`; verify Node can initialize the real WASM.
-- [ ] Report tests, limits, and build commands; do not touch frontend/storage files.
+- [x] Write failing Rust tests for incremental JSON/JSONL/HTML imports, legacy grouping, normalizing API records, full/cleaned/raw/JSONL/CSV/text/HTML exports, filters, escaping, bounded records, and truncation.
+- [x] Implement `ArchiveImporter`, `ArchiveExporter`, `normalize_batch`; run native tests and wasm32 release build.
+- [x] Generate web-target bindings at `wasm/archive_engine.js` and `wasm/archive_engine_bg.wasm`; verify Node can initialize the real WASM.
+- [x] Report tests, limits, and build commands; do not touch frontend/storage files.
 
 ### Task 2: Disk-backed worker (parallel owner)
 
 Files: `storage.js`, `archive-worker.js`, `tests/storage.test.mjs`, `tests/worker.test.mjs`.
 Interfaces: exact RPC/ABI in `docs/extension-interfaces.md`.
 
-- [ ] Write failing storage tests for atomic append/checkpoints, deduplication, stable order, user counts, import staging, deletion, and bounded reads.
-- [ ] Implement IndexedDB persistence and worker operations with cancellation and backpressure.
-- [ ] Stream imports through Rust and exports into OPFS; return File handles instead of output strings; report quotas/errors.
-- [ ] Verify with fake-indexeddb and bounded in-memory file-system test doubles; parent runs real browser/WASM integration.
+- [x] Write failing storage tests for atomic append/checkpoints, deduplication, stable order, user counts, import staging, deletion, and bounded reads.
+- [x] Implement IndexedDB persistence and worker operations with cancellation and backpressure.
+- [x] Stream imports through Rust and exports into OPFS; return File handles instead of output strings; report quotas/errors.
+- [x] Verify with fake-indexeddb and bounded in-memory file-system test doubles; parent runs real browser/WASM integration.
 
 ### Task 3: Workspace, collector and packaging (parent owner)
 
 Files: `collector.js`, `workspace.{html,css,js}`, `popup.{html,js}`, `manifest.json`, `package.json`, tests, docs.
 
-- [ ] Write failing collector tests for limits, date bounds, header pacing, retries, stop/auth errors, and resume checkpoints.
-- [ ] Implement per-page MAIN-world fetch with request timeout and isolated settings; never return tokens.
-- [ ] Add workspace controls, saved presets, recovery selection, progress, user search, format preview, split exports, and download links.
-- [ ] Open workspace from popup and preserve quick HTML route; update fork links, version and CSP/permissions.
+- [x] Write failing collector tests for limits, date bounds, header pacing, retries, stop/auth errors, and resume checkpoints.
+- [x] Implement per-page MAIN-world fetch with request timeout and isolated settings; never return tokens.
+- [x] Add workspace controls, saved presets, recovery selection, progress, user search, format preview, split exports, and download links.
+- [x] Open workspace from popup and preserve quick HTML route; update fork links, version and CSP/permissions.
 
 ### Task 4: Integration, 500 MB verification, review and delivery
 
 Files: `tests/wasm.test.mjs`, `tests/browser/**`, `scripts/benchmark.mjs`, docs, generated WASM.
 
-- [ ] Run native Rust and JavaScript tests, actual WASM roundtrips, and browser IndexedDB/OPFS workflow.
-- [ ] Generate and process a 500 MB fixture with measured record counts, output validation, memory and elapsed time; report actual scope and limits.
-- [ ] Run fresh independent review, reproduce/fix important findings, rerun required checks.
-- [ ] Commit the branch and attempt pushing it to the user's fork; do not merge or publish a release.
+- [x] Run native Rust and JavaScript tests, actual WASM roundtrips, and browser IndexedDB/OPFS workflow.
+- [x] Generate and process a 500 MB fixture with measured record counts, output validation, memory and elapsed time; report actual scope and limits.
+- [x] Run fresh independent review, reproduce/fix important findings, rerun required checks.
+- [x] Commit the branch and attempt pushing it to the user's fork; do not merge or publish a release.
 
 ## Execution
 
 User approved this design and said to use judgment on implementation. Run Tasks 1 and 2 in parallel with fixed interfaces while parent implements Task 3. Review their distinct outputs, then integrate and verify Task 4. This is an isolated clone on `feat/rust-wasm-streaming-exports`, separate from the previous desktop project.
+
